@@ -1,0 +1,4 @@
+PyQt5>=5.15.0
+rpm-py-installer>=1.1.0
+click>=8.0.0
+toml>=0.10.2
