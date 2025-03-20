@@ -60,58 +60,95 @@ class RPMBuilder:
             
     def _find_icon_in_extracted_dir(self):
         """
-        Automaticky hľadá ikonu v extrahovanom AppImage priečinku
+        Automaticky hľadá ikonu v extrahovanom priečinku aplikácie
         
         Returns:
             Path: Cesta k nájdenej ikone alebo None ak sa ikona nenašla
         """
-        logger.info(f"Hľadám ikonu v extrahovanom AppImage priečinku: {self.extracted_dir}")
-        
-        # Najprv hľadaj v squashfs-root ak existuje
-        squashfs_root = self.extracted_dir / "squashfs-root"
-        search_dir = squashfs_root if squashfs_root.exists() else self.extracted_dir
-        
-        # Prioritné ikony na kontrolu
-        # 1. .DirIcon - špeciálny súbor používaný v AppImage
-        dir_icon = search_dir / ".DirIcon"
-        if dir_icon.exists():
-            logger.info(f"Nájdená .DirIcon ikona: {dir_icon}")
-            return dir_icon
+        if not self.extracted_dir.exists():
+            logger.warning(f"Priečinok {self.extracted_dir} neexistuje")
+            return None
             
-        # 2. Hľadaj ikony v koreňovom adresári
-        icon_extensions = ['.png', '.svg', '.jpg', '.jpeg', '.ico']
-        for ext in icon_extensions:
-            icons = list(search_dir.glob(f"*{ext}"))
-            if icons:
-                logger.info(f"Nájdená ikona v koreňovom adresári: {icons[0]}")
-                return icons[0]
+        # Najprv skontrolujeme obvyklú cestu v AppImage štruktúre
+        icon_paths = []
+        
+        # 1. Skúsime nájsť ikony v štandardných adresároch
+        standard_icon_dirs = [
+            self.app_dir / "usr" / "share" / "icons",
+            self.app_dir / "usr" / "share" / "pixmaps",
+            self.app_dir / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps",
+            self.app_dir / ".DirIcon",
+            self.app_dir
+        ]
+        
+        # 2. Hľadáme ikony podľa názvu aplikácie
+        icon_names = [
+            self.app_name.lower(),
+            self.rpm_name.lower(),
+            "icon",
+            "app",
+            "application",
+            "logo"
+        ]
+        
+        # Hľadanie v štandardných adresároch
+        for icon_dir in standard_icon_dirs:
+            if not isinstance(icon_dir, Path):
+                icon_dir = Path(icon_dir)
                 
-        # 3. Hľadaj ikony v .local/share/icons
-        icon_dir = search_dir / ".local/share/icons"
-        if icon_dir.exists():
-            for ext in icon_extensions:
-                icons = list(icon_dir.glob(f"**/*{ext}"))
-                if icons:
-                    logger.info(f"Nájdená ikona v .local/share/icons: {icons[0]}")
-                    return icons[0]
-                    
-        # 4. Hľadaj ikony v /usr/share/icons
-        icon_dir = search_dir / "usr/share/icons"
-        if icon_dir.exists():
-            for ext in icon_extensions:
-                icons = list(icon_dir.glob(f"**/*{ext}"))
-                if icons:
-                    logger.info(f"Nájdená ikona v usr/share/icons: {icons[0]}")
-                    return icons[0]
-                    
-        # 5. Hľadaj ikony kdekoľvek v extrahovanom priečinku
-        for ext in icon_extensions:
-            icons = list(search_dir.glob(f"**/*{ext}"))
-            if icons:
-                logger.info(f"Nájdená ikona v extrahovanom priečinku: {icons[0]}")
-                return icons[0]
+            if not icon_dir.exists():
+                continue
                 
-        logger.warning("Nebola nájdená žiadna ikona v extrahovanom priečinku AppImage")
+            # Ak je to súbor (napr. .DirIcon), použijeme ho
+            if icon_dir.is_file():
+                icon_paths.append(icon_dir)
+                continue
+                
+            # Hľadáme ikony v adresári
+            for icon_name in icon_names:
+                for ext in [".svg", ".png", ".xpm", ".ico"]:
+                    icon_path = icon_dir / f"{icon_name}{ext}"
+                    if icon_path.exists():
+                        icon_paths.append(icon_path)
+                        
+        # 3. Rekurzívne hľadanie ikon v celom adresári
+        if not icon_paths:
+            # Prioritné prípony
+            exts = [".svg", ".png", ".xpm", ".ico"]
+            all_icons = []
+            
+            # Rekurzívne hľadanie všetkých súborov s podporovanou príponou
+            for ext in exts:
+                for root, _, files in os.walk(self.app_dir):
+                    root_path = Path(root)
+                    for file in files:
+                        if file.lower().endswith(ext):
+                            all_icons.append(root_path / file)
+            
+            # Prioritizácia ikon podľa názvu
+            for icon_name in icon_names:
+                for icon_path in all_icons:
+                    if icon_name in icon_path.stem.lower():
+                        icon_paths.append(icon_path)
+                        
+            # Ak sme nenašli žiadnu ikonu podľa názvu, použijeme prvú nájdenú
+            if not icon_paths and all_icons:
+                icon_paths.append(all_icons[0])
+                
+        # Výber najlepšej ikony
+        if icon_paths:
+            # Prioritizácia SVG > PNG > iné formáty
+            for ext in [".svg", ".png", ".xpm", ".ico"]:
+                for icon_path in icon_paths:
+                    if icon_path.suffix.lower() == ext:
+                        logger.info(f"Nájdená ikona: {icon_path}")
+                        return icon_path
+                        
+            # Ak sme nedostali zhodu podľa formátu, vrátime prvú nájdenú
+            logger.info(f"Nájdená ikona: {icon_paths[0]}")
+            return icon_paths[0]
+            
+        logger.warning("Nenájdená žiadna ikona pre aplikáciu")
         return None
         
     def _normalize_name(self, name):
@@ -216,61 +253,97 @@ cp -r %{{_sourcedir}}/app/* %{{buildroot}}/opt/{self.rpm_name}/
 
 # Vytvorenie spúšťača
 mkdir -p %{{buildroot}}/usr/bin
-echo '#!/bin/bash' > %{{buildroot}}/usr/bin/{self.rpm_name}
-echo 'exec /opt/{self.rpm_name}/AppRun "$@"' >> %{{buildroot}}/usr/bin/{self.rpm_name}
+cat > %{{buildroot}}/usr/bin/{self.rpm_name} << 'EOF'
+#!/bin/bash
+cd /opt/{self.rpm_name}
+if [ -x /opt/{self.rpm_name}/AppRun ]; then
+    exec /opt/{self.rpm_name}/AppRun "$@"
+else
+    # Skontrolovať, či existuje iný spustiteľný súbor
+    for executable in $(find /opt/{self.rpm_name} -type f -executable ! -path "*/\.*" | sort); do
+        if [ -f "$executable" ] && [ -x "$executable" ]; then
+            exec "$executable" "$@"
+            break
+        fi
+    done
+    echo "Nenájdený žiadny spustiteľný súbor v /opt/{self.rpm_name}"
+    exit 1
+fi
+EOF
 chmod +x %{{buildroot}}/usr/bin/{self.rpm_name}
 
 # Vytvorenie desktop súboru
 mkdir -p %{{buildroot}}/usr/share/applications
-echo '[Desktop Entry]' > %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
-echo 'Name={self.app_name}' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
+cat > %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop << EOF
+[Desktop Entry]
+Name={self.app_name}
+Exec={self.rpm_name}
+Terminal=false
+Type=Application
+Categories=Utility;
+EOF
+
 """)
 
             # Doplnenie cesty k ikone
             if self.icon_path:
                 dest_icon_filename = f"{self.rpm_name}{icon_ext}"
-                f.write(f"echo 'Icon={self.rpm_name}' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop\n")
+                f.write(f"echo 'Icon={dest_icon_filename}' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop\n")
                 f.write(f"mkdir -p %{{buildroot}}/usr/share/pixmaps\n")
                 f.write(f"cp %{{_sourcedir}}/icon{icon_ext} %{{buildroot}}/usr/share/pixmaps/{dest_icon_filename}\n")
             else:
-                f.write(f"echo 'Icon=/opt/{self.rpm_name}/usr/share/icons/hicolor/scalable/apps/{self.app_name}' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop\n")
-            
-            f.write(f"""echo 'Exec={self.rpm_name}' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
-echo 'Terminal=false' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
-echo 'Type=Application' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
-echo 'Categories=Utility;' >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
+                # Hľadá ikony v app_dir a používa prvú nájdenú
+                f.write(f"""
+# Hľadanie ikony v aplikácií
+for ICON_PATH in $(find %{{_sourcedir}}/app -type f -name "*.png" -o -name "*.svg" -o -name "*.ico" | sort); do
+    if [ -n "$ICON_PATH" ]; then
+        ICON_BASENAME=$(basename "$ICON_PATH")
+        ICON_EXT="${{ICON_BASENAME##*.}}"
+        mkdir -p %{{buildroot}}/usr/share/pixmaps
+        cp "$ICON_PATH" %{{buildroot}}/usr/share/pixmaps/{self.rpm_name}.$ICON_EXT
+        echo "Icon={self.rpm_name}.$ICON_EXT" >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
+        break
+    fi
+done
 
-# Copy icons if available
-mkdir -p %{{buildroot}}/usr/share/icons/hicolor/scalable/apps
-if [ -f %{{_sourcedir}}/app/co.anysphere.cursor.png ]; then
-    cp %{{_sourcedir}}/app/co.anysphere.cursor.png %{{buildroot}}/usr/share/icons/hicolor/scalable/apps/{self.rpm_name}.png
+# Ak nebola nájdená žiadna ikona, použije sa predvolená
+if ! grep -q "Icon=" %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop; then
+    echo "Icon={self.rpm_name}" >> %{{buildroot}}/usr/share/applications/{self.rpm_name}.desktop
 fi
+""")
 
+            # Zoznam súborov
+            f.write(f"""
 %files
 %defattr(-,root,root,-)
 %dir /opt/{self.rpm_name}
-%dir /usr/share/applications
-%dir /usr/share/icons/hicolor/scalable/apps
 /opt/{self.rpm_name}/*
 /usr/bin/{self.rpm_name}
 /usr/share/applications/{self.rpm_name}.desktop
-/usr/share/icons/hicolor/scalable/apps/{self.rpm_name}.png
 """)
 
-            # Pridanie ikony do zoznamu súborov
+            # Pridanie ikôn do zoznamu súborov
             if self.icon_path:
                 dest_icon_filename = f"{self.rpm_name}{icon_ext}"
                 f.write(f"/usr/share/pixmaps/{dest_icon_filename}\n")
+            else:
+                f.write(f"""
+# Podmienene pridanie ikony ak existuje
+if [ -f %{{buildroot}}/usr/share/pixmaps/{self.rpm_name}.* ]; then
+    /usr/share/pixmaps/{self.rpm_name}.*
+fi
+""")
             
             f.write(f"""
 %changelog
 * {subprocess.check_output(['date', '+%a %b %d %Y'], text=True).strip()} AppImage2RPM <appimage2rpm> - {self.app_version}-1
-- Initial RPM package from AppImage
+- Initial RPM package
 """)
                 
         self.spec_file = spec_file
+        logger.info(f"Vytvorený spec súbor: {spec_file}")
         return spec_file
-            
+
     def prepare_sources(self, desktop_file=None, categories=None):
         """
         Pripraví zdrojové súbory pre balík
@@ -338,8 +411,57 @@ fi
             logger.info("Príprava zdrojových súborov pre RPM balík")
             if not self.prepare_sources(desktop_file, categories):
                 raise RuntimeError("Chyba pri príprave zdrojových súborov")
+            
+            # Kontrola existencie spustiteľného súboru
+            app_dir = self.rpmbuild_root / "SOURCES" / "app"
+            app_run_path = app_dir / "AppRun"
+            main_executable = None
+            
+            # Ak neexistuje AppRun, nájdeme hlavný spustiteľný súbor
+            if not app_run_path.exists():
+                logger.info("AppRun súbor nebol nájdený, hľadám hlavný spustiteľný súbor")
+                executable_files = []
                 
-            # Vytvorenie spec súboru
+                # Nájdenie všetkých spustiteľných súborov v app_dir
+                for root, _, files in os.walk(app_dir):
+                    root_path = Path(root)
+                    for file in files:
+                        file_path = root_path / file
+                        if os.access(file_path, os.X_OK) and file_path.is_file():
+                            # Ak názov binárky zodpovedá názvu aplikácie, prioritizujeme
+                            if file.lower() == self.rpm_name.lower() or file.lower() == self.app_name.lower():
+                                main_executable = file_path
+                                break
+                            executable_files.append(file_path)
+                
+                # Ak nebol nájdený súbor so zhodným názvom, použijeme prvý nájdený
+                if not main_executable and executable_files:
+                    main_executable = executable_files[0]
+                
+                if main_executable:
+                    # Získať relatívnu cestu od app_dir
+                    rel_path = main_executable.relative_to(app_dir)
+                    logger.info(f"Nájdený hlavný spustiteľný súbor: {rel_path}")
+                    
+                    # Vytvorenie AppRun súboru
+                    with open(app_run_path, 'w') as f:
+                        f.write("#!/bin/bash\n")
+                        f.write(f"cd \"$(dirname \"$0\")\"\n")  # Prejdeme do adresára s aplikáciou
+                        f.write(f"exec ./{rel_path} \"$@\"\n")
+                    
+                    # Nastavenie práv na spustenie
+                    os.chmod(app_run_path, 0o755)
+                    logger.info(f"Vytvorený AppRun súbor s odkazom na {rel_path}")
+                else:
+                    logger.warning("Nebol nájdený žiadny spustiteľný súbor. RPM balík nemusí fungovať správne.")
+                    # Vytvoríme aspoň prázdny AppRun, aby sa RPM zostavil
+                    with open(app_run_path, 'w') as f:
+                        f.write("#!/bin/bash\n")
+                        f.write("echo 'Nenájdený žiadny spustiteľný súbor'\n")
+                        f.write("exit 1\n")
+                    os.chmod(app_run_path, 0o755)
+                
+            # Vytvorenie spec súboru s vhodným entryscrpt
             logger.info("Vytvorenie spec súboru pre RPM balík")
             self._create_spec_file(requires, description, license, summary, group, url)
             
@@ -382,16 +504,22 @@ fi
             if not rpm_files:
                 # Skús nájsť akékoľvek RPM súbory
                 all_rpms = list(glob.glob(f"{self.rpmbuild_root}/RPMS/**/*.rpm", recursive=True))
-                logger.error(f"RPM balík nebol nájdený v očakávanej ceste. Všetky nájdené RPM súbory: {all_rpms}")
-                raise FileNotFoundError(f"RPM balík nebol nájdený. Vzor: {rpm_glob_pattern}")
+                logger.info(f"Hľadám všetky RPM v {self.rpmbuild_root}/RPMS/: {all_rpms}")
                 
-            rpm_file = Path(rpm_files[0])
+                if all_rpms:
+                    rpm_file = Path(all_rpms[0])
+                else:
+                    logger.error(f"RPM balík nebol nájdený v očakávanej ceste.")
+                    raise FileNotFoundError(f"RPM balík nebol nájdený. Vzor: {rpm_glob_pattern}")
+            else:
+                rpm_file = Path(rpm_files[0])
+                
             logger.info(f"Úspešne vytvorený RPM balík: {rpm_file}")
             
             # Kopírovanie výsledného balíka do výstupného adresára
             if output_dir:
-                output_path = Path(output_dir) / rpm_file.name
                 os.makedirs(output_dir, exist_ok=True)
+                output_path = Path(output_dir) / rpm_file.name
                 logger.info(f"Kopírujem {rpm_file} do {output_path}")
                 shutil.copy2(rpm_file, output_path)
                 logger.info(f"RPM balík úspešne skopírovaný do {output_path}")

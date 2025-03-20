@@ -22,6 +22,7 @@ from appimage_utils import AppImageExtractor
 from rpm_utils import RPMBuilder
 from dependency_utils import DependencyAnalyzer, DistroProfileManager
 from repo_utils import RepoManager
+from directory_utils import DirectoryPackager
 
 # Nastavenie loggeru
 logging.basicConfig(
@@ -35,7 +36,7 @@ class ConversionThread(QThread):
     progress_signal = pyqtSignal(int, str)
     finished_signal = pyqtSignal(bool, str, str)
     
-    def __init__(self, appimage_path, output_dir, metadata=None, distro_profile=None, auto_deps=True, parent=None, repo_info=None):
+    def __init__(self, appimage_path, output_dir, metadata=None, distro_profile=None, auto_deps=True, parent=None, repo_info=None, is_directory=False):
         super().__init__(parent)
         self.appimage_path = appimage_path
         self.output_dir = output_dir
@@ -43,6 +44,7 @@ class ConversionThread(QThread):
         self.distro_profile = distro_profile
         self.auto_deps = auto_deps
         self.repo_info = repo_info
+        self.is_directory = is_directory
         
     def run(self):
         try:
@@ -68,18 +70,44 @@ class ConversionThread(QThread):
             if macros_file:
                 self.progress_signal.emit(15, f"Vytvorené RPM makrá pre {profile['name']}")
             
-            # Extrakcia AppImage
-            self.progress_signal.emit(20, "Extrakcia AppImage...")
-            extractor = AppImageExtractor(self.appimage_path)
-            extracted_dir = extractor.extract()
+            extracted_dir = None
+            icon_path = None
             
-            self.progress_signal.emit(30, "Získavanie metadát...")
-            
-            # Získanie metadát
-            if not self.metadata:
-                metadata = extractor.parse_metadata()
+            if self.is_directory:
+                # Použitie direktória namiesto extrakcie AppImage
+                self.progress_signal.emit(20, "Spracovanie adresára...")
+                directory_packager = DirectoryPackager(self.appimage_path)
+                extracted_dir = directory_packager.get_directory()
+                
+                self.progress_signal.emit(30, "Získavanie metadát...")
+                
+                # Získanie metadát
+                if not self.metadata:
+                    metadata = directory_packager.guess_metadata()
+                else:
+                    metadata = self.metadata
+                    directory_packager.set_metadata(metadata)
+                
+                # Získanie ikony
+                self.progress_signal.emit(45, "Hľadanie ikony...")
+                icon_path = directory_packager.get_icon_file()
             else:
-                metadata = self.metadata
+                # Extrakcia AppImage
+                self.progress_signal.emit(20, "Extrakcia AppImage...")
+                extractor = AppImageExtractor(self.appimage_path)
+                extracted_dir = extractor.extract()
+                
+                self.progress_signal.emit(30, "Získavanie metadát...")
+                
+                # Získanie metadát
+                if not self.metadata:
+                    metadata = extractor.parse_metadata()
+                else:
+                    metadata = self.metadata
+                    
+                # Získanie ikony
+                self.progress_signal.emit(45, "Hľadanie ikony...")
+                icon_path = extractor.get_icon_file()
                 
             # Pokročilá detekcia závislostí
             requires = []
@@ -98,10 +126,6 @@ class ConversionThread(QThread):
                     metadata["requires"] = requires
                 else:
                     self.progress_signal.emit(40, "Žiadne závislosti neboli detekované")
-            
-            # Získanie ikony
-            self.progress_signal.emit(45, "Hľadanie ikony...")
-            icon_path = extractor.get_icon_file()
             
             self.progress_signal.emit(50, "Príprava RPM balíka...")
             
@@ -169,7 +193,8 @@ class ConversionThread(QThread):
             self.progress_signal.emit(95, "Čistenie dočasných súborov...")
             
             # Vyčistenie dočasných súborov
-            extractor.cleanup()
+            if not self.is_directory:
+                extractor.cleanup()
             builder.cleanup()
             
             self.progress_signal.emit(100, "Konverzia dokončená!")
@@ -723,103 +748,62 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         
     def setup_ui(self):
-        self.setWindowTitle("AppImage2RPM")
-        self.setGeometry(100, 100, 800, 600)
+        """Inicializácia UI"""
+        self.setWindowTitle("AppImage2RPM Konvertor")
+        self.setMinimumSize(800, 600)
         
-        # Centrálny widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
-        # Hlavný layout
-        main_layout = QVBoxLayout(central_widget)
+        layout = QVBoxLayout()
+        central_widget.setLayout(layout)
         
-        # Widget pre konverziu
+        # Pridanie widgetu konvertora
         self.converter_widget = ConverterWidget()
+        layout.addWidget(self.converter_widget)
+        
+        # Prepojenie signálov
         self.converter_widget.conversion_requested.connect(self.start_conversion)
-        main_layout.addWidget(self.converter_widget)
         
     def start_conversion(self, appimage_path, output_dir, metadata):
         """Spustí konverziu AppImage na RPM"""
+        # Uloženie ciest
         self.appimage_path = appimage_path
         self.output_dir = output_dir
         
-        # Získanie informácií z widgetov záložiek
-        distro_widget = None
-        repo_widget = None
-        
-        # Získanie widgetov zo záložiek
-        tab_widget = self.converter_widget.findChild(QTabWidget)
-        for i in range(tab_widget.count()):
-            widget = tab_widget.widget(i)
-            if isinstance(widget, DistroProfileWidget):
-                distro_widget = widget
-            elif isinstance(widget, RepoManagerWidget):
-                repo_widget = widget
-                
         # Získanie profilu distribúcie
-        distro_profile = None
-        if distro_widget:
-            distro_profile = distro_widget.get_current_profile()
-            
+        distro_profile = self.converter_widget.distro_profile.get_current_profile()
+        
+        # Automatické zisťovanie závislostí
+        auto_deps = True  # Predvolené nastavenie
+        
         # Získanie informácií o repozitári
-        repo_info = None
-        if repo_widget:
-            repo_info = repo_widget.get_repo_info()
-            
-        # Kontrola automatickej detekcie závislostí
-        auto_deps = self.converter_widget.check_dependencies.isChecked()
+        repo_info = self.converter_widget.repo_manager.get_repo_info()
         
         # Vytvorenie a spustenie vlákna pre konverziu
         self.conversion_thread = ConversionThread(
-            self.appimage_path,
-            self.output_dir,
+            appimage_path, 
+            output_dir, 
             metadata,
             distro_profile,
             auto_deps=auto_deps,
-            repo_info=repo_info
+            repo_info=repo_info,
+            is_directory=self.converter_widget.is_directory
         )
         
         self.conversion_thread.progress_signal.connect(self.converter_widget.update_progress)
         self.conversion_thread.finished_signal.connect(self.conversion_finished)
         
         self.conversion_thread.start()
-        self.converter_widget.disable_controls(True)
         
     def conversion_finished(self, success, rpm_path, message):
         """Callback po dokončení konverzie"""
-        self.converter_widget.disable_controls(False)
-        
         if success:
-            # Úspešná konverzia
-            QMessageBox.information(
-                self,
-                "Konverzia dokončená",
-                f"RPM balík bol úspešne vytvorený v:\n{rpm_path}\n\n{message}"
-            )
-            
-            # Otvorenie priečinka s výsledným RPM
-            if rpm_path:
-                self.open_output_directory(os.path.dirname(rpm_path))
-        else:
-            # Neúspešná konverzia
-            QMessageBox.critical(
-                self,
-                "Chyba pri konverzii",
-                f"Nepodarilo sa vytvoriť RPM balík.\n\n{message}"
-            )
-            
+            self.open_output_directory(self.output_dir)
+        
     def open_output_directory(self, directory):
         """Otvorí priečinok v správcovi súborov"""
-        try:
-            if sys.platform == 'win32':
-                os.startfile(directory)
-            elif sys.platform == 'darwin':
-                subprocess.call(['open', directory])
-            else:
-                subprocess.call(['xdg-open', directory])
-        except Exception as e:
-            logger.error(f"Chyba pri otváraní priečinka: {e}")
-
+        subprocess.Popen(['xdg-open', directory])
 
 class ConverterWidget(QWidget):
     """Widget pre konverziu AppImage na RPM"""
@@ -831,239 +815,218 @@ class ConverterWidget(QWidget):
         self.appimage_path = None
         self.output_dir = os.path.expanduser("~/rpmbuild/RPMS")
         self.appimage_info = None
+        self.is_directory = False
         self.setup_ui()
         
     def setup_ui(self):
         main_layout = QVBoxLayout()
         
-        # Výber súboru
-        file_group = QGroupBox("Výber súboru")
-        file_layout = QVBoxLayout()
+        # Horný panel s výberom súboru
+        file_group = QGroupBox("Zdrojový súbor")
+        file_layout = QFormLayout()
         
-        file_input_layout = QHBoxLayout()
-        self.file_input = QLineEdit()
-        self.file_input.setPlaceholderText("Cesta k AppImage súboru")
-        self.file_input.setReadOnly(True)
+        # Prepínač medzi AppImage a adresárom
+        source_type_layout = QHBoxLayout()
+        self.appimage_radio = QRadioButton("AppImage súbor")
+        self.appimage_radio.setChecked(True)
+        self.appimage_radio.toggled.connect(self.toggle_source_type)
+        self.directory_radio = QRadioButton("Adresár")
+        self.directory_radio.toggled.connect(self.toggle_source_type)
         
-        self.browse_button = QPushButton("Prehľadávať")
-        self.browse_button.clicked.connect(self.browse_appimage)
+        source_type_layout.addWidget(self.appimage_radio)
+        source_type_layout.addWidget(self.directory_radio)
+        source_type_layout.addStretch()
         
-        file_input_layout.addWidget(self.file_input)
-        file_input_layout.addWidget(self.browse_button)
+        # Vytvorenie container widgetu pre radio buttony
+        source_type_container = QWidget()
+        source_type_container.setLayout(source_type_layout)
+        file_layout.addRow("Typ zdroja:", source_type_container)
         
-        file_layout.addLayout(file_input_layout)
+        # AppImage cesta
+        self.source_edit = QLineEdit()
+        self.source_edit.setPlaceholderText("Vyberte AppImage súbor alebo adresár...")
+        self.source_edit.setReadOnly(True)
+        
+        # Tlačidlo na výber súboru
+        browse_button = QPushButton("Prehľadávať...")
+        browse_button.clicked.connect(self.browse_source)
+        
+        file_selector_layout = QHBoxLayout()
+        file_selector_layout.addWidget(self.source_edit)
+        file_selector_layout.addWidget(browse_button)
+        
+        file_layout.addRow("Cesta:", file_selector_layout)
+        
+        # Výstupný adresár
+        self.output_edit = QLineEdit(self.output_dir)
+        
+        # Tlačidlo na výber výstupného adresára
+        output_button = QPushButton("Prehľadávať...")
+        output_button.clicked.connect(self.browse_output_dir)
+        
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(self.output_edit)
+        output_layout.addWidget(output_button)
+        
+        file_layout.addRow("Výstupný adresár:", output_layout)
+        
         file_group.setLayout(file_layout)
         main_layout.addWidget(file_group)
         
-        # Výstupný adresár
-        output_group = QGroupBox("Výstupný adresár")
-        output_layout = QVBoxLayout()
+        # Metadáta a nastavenia
+        config_tabs = QTabWidget()
         
-        output_input_layout = QHBoxLayout()
-        self.output_input = QLineEdit(self.output_dir)
-        self.output_input.setPlaceholderText("Cesta k výstupnému adresáru")
+        # Tab s informáciami o AppImage
+        self.appimage_info = AppImageInfoWidget()
+        config_tabs.addTab(self.appimage_info, "Informácie o aplikácii")
         
-        self.output_button = QPushButton("Prehľadávať")
-        self.output_button.clicked.connect(self.browse_output_dir)
+        # Tab s nastaveniami distribúcie
+        self.distro_profile = DistroProfileWidget()
+        config_tabs.addTab(self.distro_profile, "Profil distribúcie")
         
-        output_input_layout.addWidget(self.output_input)
-        output_input_layout.addWidget(self.output_button)
+        # Tab pre repozitáre
+        self.repo_manager = RepoManagerWidget()
+        config_tabs.addTab(self.repo_manager, "Správa repozitárov")
         
-        output_layout.addLayout(output_input_layout)
-        output_group.setLayout(output_layout)
-        main_layout.addWidget(output_group)
+        main_layout.addWidget(config_tabs)
         
-        # Záložky s nastaveniami
-        tab_widget = QTabWidget()
-        
-        # Základné nastavenia
-        basic_widget = QWidget()
-        basic_layout = QVBoxLayout()
-        
-        # AppImage info widget
-        self.appimage_info_widget = AppImageInfoWidget()
-        basic_layout.addWidget(self.appimage_info_widget)
-        
-        basic_widget.setLayout(basic_layout)
-        tab_widget.addTab(basic_widget, "Základné nastavenia")
-        
-        # Pokročilé nastavenia
-        advanced_widget = QWidget()
-        advanced_layout = QVBoxLayout()
-        
-        # Checkbox pre automatickú detekciu závislostí
-        self.check_dependencies = QCheckBox("Automaticky detekovať závislosti")
-        self.check_dependencies.setChecked(True)
-        advanced_layout.addWidget(self.check_dependencies)
-        
-        # Nastavenia závislostí
-        dependencies_group = QGroupBox("Závislosti")
-        dependencies_layout = QVBoxLayout()
-        
-        self.dependencies_list = QListWidget()
-        dependencies_layout.addWidget(self.dependencies_list)
-        
-        dependencies_buttons = QHBoxLayout()
-        self.add_dependency_button = QPushButton("Pridať závislosť")
-        self.add_dependency_button.clicked.connect(self.add_dependency)
-        
-        self.remove_dependency_button = QPushButton("Odstrániť")
-        self.remove_dependency_button.clicked.connect(self.remove_dependency)
-        
-        dependencies_buttons.addWidget(self.add_dependency_button)
-        dependencies_buttons.addWidget(self.remove_dependency_button)
-        dependencies_buttons.addStretch()
-        
-        dependencies_layout.addLayout(dependencies_buttons)
-        dependencies_group.setLayout(dependencies_layout)
-        advanced_layout.addWidget(dependencies_group)
-        
-        advanced_widget.setLayout(advanced_layout)
-        tab_widget.addTab(advanced_widget, "Pokročilé nastavenia")
-        
-        # Widget pre správu repozitárov
-        repo_widget = RepoManagerWidget()
-        tab_widget.addTab(repo_widget, "Repozitár")
-        
-        # Widget pre správu profilov distribúcií
-        distro_widget = DistroProfileWidget()
-        tab_widget.addTab(distro_widget, "Distribúcia")
-        
-        main_layout.addWidget(tab_widget)
+        # Tlačidlo na konverziu
+        convert_button = QPushButton("Konvertovať na RPM")
+        convert_button.setMinimumHeight(50)
+        convert_button.clicked.connect(self.request_conversion)
         
         # Progress bar
-        progress_group = QGroupBox("Priebeh konverzie")
-        progress_layout = QVBoxLayout()
-        
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         
+        # Status správa
         self.status_label = QLabel("Pripravený na konverziu")
         
+        progress_layout = QVBoxLayout()
+        progress_layout.addWidget(convert_button)
         progress_layout.addWidget(self.progress_bar)
         progress_layout.addWidget(self.status_label)
         
-        progress_group.setLayout(progress_layout)
-        main_layout.addWidget(progress_group)
-        
-        # Tlačidlá
-        buttons_layout = QHBoxLayout()
-        
-        self.convert_button = QPushButton("Konvertovať")
-        self.convert_button.clicked.connect(self.request_conversion)
-        self.convert_button.setEnabled(False)
-        
-        buttons_layout.addStretch()
-        buttons_layout.addWidget(self.convert_button)
-        
-        main_layout.addLayout(buttons_layout)
+        main_layout.addLayout(progress_layout)
         
         self.setLayout(main_layout)
         
-    def browse_appimage(self):
-        """Otvorí dialóg pre výber AppImage súboru"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Vyberte AppImage súbor",
-            os.path.expanduser("~"),
-            "AppImage súbory (*.AppImage);;Všetky súbory (*)"
-        )
+    def toggle_source_type(self):
+        """Prepína medzi AppImage a adresárom"""
+        if self.appimage_radio.isChecked():
+            self.is_directory = False
+            self.source_edit.setPlaceholderText("Vyberte AppImage súbor...")
+        else:
+            self.is_directory = True
+            self.source_edit.setPlaceholderText("Vyberte adresár...")
         
-        if file_path:
-            self.appimage_path = file_path
-            self.file_input.setText(file_path)
-            self.convert_button.setEnabled(True)
+    def browse_source(self):
+        """Otvorí dialóg pre výber AppImage súboru alebo adresára"""
+        if self.is_directory:
+            directory = QFileDialog.getExistingDirectory(
+                self, 
+                "Vyberte adresár s aplikáciou",
+                os.path.expanduser("~")
+            )
             
-            # Načítanie metadát z AppImage
-            try:
-                extractor = AppImageExtractor(file_path)
-                metadata = extractor.parse_metadata()
+            if directory:
+                self.appimage_path = directory
+                self.source_edit.setText(directory)
                 
-                # Nastavenie metadát do AppImageInfoWidget
-                self.appimage_info_widget.set_metadata(metadata)
+                # Pokúsiť sa zistiť metadata z adresára
+                try:
+                    directory_packager = DirectoryPackager(directory)
+                    metadata = directory_packager.guess_metadata()
+                    self.appimage_info.set_metadata(metadata)
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Chyba pri načítaní adresára",
+                        f"Nepodarilo sa načítať informácie z adresára: {str(e)}"
+                    )
+        else:
+            file_dialog = QFileDialog()
+            file_path, _ = file_dialog.getOpenFileName(
+                self,
+                "Vyberte AppImage súbor",
+                os.path.expanduser("~"),
+                "AppImage Files (*.AppImage *.appimage);;All Files (*)"
+            )
+            
+            if file_path:
+                self.appimage_path = file_path
+                self.source_edit.setText(file_path)
                 
-                # Vyčistenie extrahovaných súborov
-                extractor.cleanup()
-                
-            except Exception as e:
-                logger.error(f"Chyba pri načítaní metadát: {e}", exc_info=True)
-                QMessageBox.warning(
-                    self,
-                    "Chyba pri načítaní metadát",
-                    f"Nepodarilo sa načítať metadáta z AppImage súboru: {str(e)}"
-                )
-                
+                # Pokúsiť sa získať metadáta z AppImage
+                try:
+                    extractor = AppImageExtractor(file_path)
+                    metadata = extractor.parse_metadata()
+                    self.appimage_info.set_metadata(metadata)
+                except Exception as e:
+                    QMessageBox.warning(
+                        self,
+                        "Chyba pri načítaní AppImage",
+                        f"Nepodarilo sa načítať metadáta z AppImage: {str(e)}"
+                    )
+                    
     def browse_output_dir(self):
         """Otvorí dialóg pre výber výstupného adresára"""
         directory = QFileDialog.getExistingDirectory(
-            self,
+            self, 
             "Vyberte výstupný adresár",
-            self.output_dir,
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks
+            self.output_dir
         )
         
         if directory:
             self.output_dir = directory
-            self.output_input.setText(directory)
+            self.output_edit.setText(directory)
             
     def add_dependency(self):
         """Pridá závislosť do zoznamu"""
-        # Jednoduchý dialóg pre zadanie závislosti
-        dependency, ok = QInputDialog.getText(
-            self,
-            "Pridať závislosť",
-            "Zadajte názov balíka (napr. 'glibc >= 2.28'):"
-        )
+        # Implementácia pridávania závislostí
+        pass
         
-        if ok and dependency:
-            self.dependencies_list.addItem(dependency)
-            
     def remove_dependency(self):
         """Odstráni vybranú závislosť zo zoznamu"""
-        selected_items = self.dependencies_list.selectedItems()
+        # Implementácia odstraňovania závislostí
+        pass
         
-        for item in selected_items:
-            self.dependencies_list.takeItem(self.dependencies_list.row(item))
-            
     def request_conversion(self):
         """Spustí konverziu AppImage na RPM"""
         if not self.appimage_path:
             QMessageBox.warning(
                 self,
-                "Chyba",
-                "Vyberte AppImage súbor pre konverziu"
+                "Chýba vstupný súbor",
+                "Vyberte AppImage súbor alebo adresár na konverziu"
             )
             return
             
-        # Aktualizácia výstupného adresára z textu
-        self.output_dir = self.output_input.text()
-        
-        # Kontrola, či výstupný adresár existuje
+        self.output_dir = self.output_edit.text()
         if not os.path.isdir(self.output_dir):
             try:
                 os.makedirs(self.output_dir, exist_ok=True)
             except Exception as e:
                 QMessageBox.critical(
                     self,
-                    "Chyba",
+                    "Chyba výstupného adresára",
                     f"Nepodarilo sa vytvoriť výstupný adresár: {str(e)}"
                 )
                 return
                 
-        # Získanie metadát z AppImageInfoWidget
-        metadata = self.appimage_info_widget.get_metadata()
+        # Získanie metadát
+        metadata = self.appimage_info.get_metadata()
         
-        # Pridanie závislostí z pokročilých nastavení
-        if not self.check_dependencies.isChecked():
-            dependencies = []
-            for i in range(self.dependencies_list.count()):
-                dependencies.append(self.dependencies_list.item(i).text())
-                
-            if dependencies:
-                metadata["requires"] = dependencies
-                
-        # Emit signál pre konverziu
+        # Získanie profilu distribúcie
+        distro_profile = self.distro_profile.get_current_profile()
+        
+        # Získanie informácií o repozitári
+        repo_info = self.repo_manager.get_repo_info()
+        
+        # Vypnúť ovládacie prvky počas konverzie
+        self.disable_controls(True)
+        
+        # Emitovanie signálu pre konverziu
+        # Rodičovské okno by malo vytvoriť vlákno pre konverziu
         self.conversion_requested.emit(self.appimage_path, self.output_dir, metadata)
         
     def update_progress(self, value, message):
@@ -1073,10 +1036,41 @@ class ConverterWidget(QWidget):
         
     def disable_controls(self, disabled):
         """Zapne/vypne ovládacie prvky počas konverzie"""
-        self.browse_button.setEnabled(not disabled)
-        self.output_button.setEnabled(not disabled)
-        self.convert_button.setEnabled(not disabled)
-
+        for child in self.findChildren(QWidget):
+            if isinstance(child, (QPushButton, QLineEdit, QRadioButton)) and child != self.status_label:
+                child.setEnabled(not disabled)
+                
+    def conversion_finished(self, success, rpm_path, message):
+        """Callback po dokončení konverzie"""
+        self.disable_controls(False)
+        
+        if success:
+            reply = QMessageBox.information(
+                self,
+                "Konverzia dokončená",
+                f"{message}\n\nRPM balík: {rpm_path}\n\nChcete otvoriť výstupný adresár?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.open_output_directory(os.path.dirname(rpm_path))
+        else:
+            QMessageBox.critical(
+                self,
+                "Chyba konverzie",
+                message
+            )
+            
+    def open_output_directory(self, directory):
+        """Otvorí priečinok v správcovi súborov"""
+        if sys.platform == 'win32':
+            os.startfile(directory)
+        elif sys.platform == 'darwin':
+            subprocess.call(['open', directory])
+        else:
+            # Linux/Unix
+            subprocess.call(['xdg-open', directory])
 
 def main():
     """Hlavná funkcia aplikácie"""
