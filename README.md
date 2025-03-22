@@ -1,78 +1,107 @@
 # AppImage2RPM
 
-A tool for converting AppImage files into RPM packages for Fedora and RHEL distributions.
+Convert AppImage packages to RPM format easily with a modern GUI or command line interface.
 
 ## Features
 
-- Convert AppImage files to RPM packages
-- Automatically extract metadata from AppImage files
-- Automatic icon detection from AppImage contents
-- Customizable RPM specifications
-- Dependency management
-- Graphical user interface
-- Support for multiple distribution profiles
-
-## Requirements
-
-- Fedora 41 or compatible RHEL distribution
-- Python 3.10+
-- PyQt5
-- RPM build tools
+- Convert AppImage files to RPM packages with a single click
+- Detect and include dependencies automatically
+- Support for multiple Linux distributions (Fedora, CentOS, RHEL)
+- Advanced icon detection and handling 
+- Repository integration (COPR)
+- Threaded background processing for responsive UI
+- Detailed real-time logging
+- Command-line interface for scripting
 
 ## Installation
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+### Requirements
 
-# Install RPM build tools
-sudo dnf install rpm-build rpmdevtools
+- Python 3.8 or newer
+- RPM build tools (`rpmbuild`, `rpm-build` package)
+- Qt6 libraries (for GUI)
+
+### From Source
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/dem0n1337/appimage2rpm.git
+cd appimage2rpm
+```
+
+2. Create a virtual environment and install dependencies:
+
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+3. Install the package:
+
+```bash
+pip install -e .
 ```
 
 ## Usage
 
 ### Graphical Interface
 
-```bash
-python appimage2rpm.py
-```
-
-### Command Line (Test Script)
-
-For testing or debugging purposes, you can use the test script:
+To start the GUI:
 
 ```bash
-python test_rpm_builder.py /path/to/extracted/appimage
+appimage2rpm
 ```
 
-## How It Works
+### Command Line Interface
 
-1. **AppImage Extraction:** The tool extracts the contents of the AppImage file to a temporary directory.
-2. **Metadata Extraction:** It automatically extracts metadata like application name, version, icon, and description.
-3. **Icon Detection:** The tool automatically searches for icons in common locations within the extracted AppImage.
-4. **Dependency Analysis:** It analyzes the binaries to detect dependencies required for the application.
-5. **RPM Spec Creation:** A spec file is generated based on the extracted information.
-6. **RPM Building:** The RPM package is built using rpmbuild.
+Convert an AppImage to RPM:
 
-## Development
+```bash
+appimage2rpm convert path/to/application.AppImage --output-dir /path/to/output/directory
+```
 
-### Key Components
+With additional options:
 
-- `appimage2rpm.py`: Main application with GUI
-- `rpm_utils.py`: Contains the RPMBuilder class for creating RPM packages
-- `appimage_utils.py`: Handles AppImage extraction and metadata parsing
-- `dependency_utils.py`: Analyzes and manages dependencies
-- `repo_utils.py`: Manages RPM repositories
+```bash
+appimage2rpm convert path/to/application.AppImage --name CustomName --version 1.2.3 --distro fedora --no-auto-deps
+```
 
-### Debugging
+### Options
 
-The application creates detailed log files to help diagnose issues:
-- `rpm_builder_debug.log`: Contains detailed information about the RPM building process
+- `--output-dir, -o`: Directory where the RPM package will be saved
+- `--name`: Set custom package name
+- `--version`: Set custom package version
+- `--release`: Set package release (default: 1)
+- `--auto-deps/--no-auto-deps`: Enable/disable automatic dependency detection
+- `--distro`: Target distribution profile (fedora, centos, rhel)
 
-## License
+## Building RPM Packages
 
-GPL-3.0
+The application creates well-formed RPM packages that:
+
+1. Install the application to `/usr/lib/<app_name>/`
+2. Create a launcher in `/usr/bin/`
+3. Install desktop file to `/usr/share/applications/`
+4. Install icons to appropriate locations in the hicolor icon theme
+
+## Icon Handling
+
+Icons are detected using the following priority:
+
+1. SVG icons (preferred for scalability)
+2. PNG icons (largest size preferred)
+3. Icons referenced in .desktop files
+4. Icons with matching application name
+5. Other icon formats (XPM, etc.)
+
+Icons are properly installed according to the [XDG Icon Theme Specification](https://specifications.freedesktop.org/icon-theme-spec/icon-theme-spec-latest.html).
 
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
