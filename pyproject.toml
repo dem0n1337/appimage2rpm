@@ -6,24 +6,28 @@ build-backend = "setuptools.build_meta"
 name = "appimage2rpm"
 version = "1.0.0"
 description = "Convert AppImage packages to RPM format"
+authors = [
+    {name = "AppImage2RPM Team", email = "appimage2rpm@example.com"}
+]
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "MIT"}
+license = "MIT"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
 ]
+# Note: rpm-py-installer is excluded due to installation issues
+# Install rpm bindings manually with: sudo dnf install python3-rpm or equivalent for your distro
 dependencies = [
     "PySide6>=6.5.0",
-    "rpm-py-installer>=1.1.0",
     "click>=8.0.0",
     "toml>=0.10.2",
 ]
+urls = {Homepage = "https://github.com/dem0n1337/appimage2rpm"}
 
 [project.scripts]
 appimage2rpm = "appimage2rpm.__main__:main"

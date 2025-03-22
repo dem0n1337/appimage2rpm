@@ -1,0 +1,1 @@
+"""Utility functions for AppImage2RPM.""" 

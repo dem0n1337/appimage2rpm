@@ -1,0 +1,1 @@
+"""Core functionality for AppImage2RPM conversion.""" 

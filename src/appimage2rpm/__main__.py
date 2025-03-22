@@ -2,25 +2,24 @@
 # -*- coding: utf-8 -*-
 
 """
-Main entry point for the appimage2rpm application.
+Main entry point for the AppImage2RPM application.
 Provides both CLI and GUI interfaces.
 """
 
+import os
 import sys
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from appimage2rpm.gui.main_window import MainWindow
 from appimage2rpm.core.controller import AppImage2RPMController
 import click
+from appimage2rpm.utils.logger import configure_logging
 
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("appimage2rpm")
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 @click.group(invoke_without_command=True)
@@ -51,43 +50,55 @@ def convert(appimage_path: str, output_dir: Optional[str] = None,
     
     APPIMAGE_PATH: Path to the AppImage file to convert.
     """
-    # Initialize the controller
+    logger.info(f"Converting {appimage_path}")
+    
+    # Create controller
     controller = AppImage2RPMController()
     
     # Prepare metadata
-    metadata = {}
+    metadata: Dict[str, Any] = {}
     if name:
         metadata["name"] = name
     if version:
         metadata["version"] = version
     metadata["release"] = release
     
-    # Start the conversion
-    result = controller.convert_appimage(
-        appimage_path=appimage_path,
-        output_dir=output_dir,
-        metadata=metadata,
-        distro_profile=distro,
-        auto_deps=auto_deps
-    )
+    # Progress callback for CLI
+    def progress_callback(percent: int, message: str) -> None:
+        """Display progress in CLI."""
+        click.echo(f"{percent}% - {message}")
     
-    if result["success"]:
-        logger.info(f"Conversion successful: {result['rpm_path']}")
-        click.echo(f"RPM package created: {result['rpm_path']}")
-        return 0
-    else:
-        logger.error(f"Conversion failed: {result['message']}")
-        click.echo(f"Error: {result['message']}", err=True)
+    # Run conversion
+    try:
+        result = controller.convert_appimage(
+            appimage_path=appimage_path,
+            output_dir=output_dir,
+            metadata=metadata,
+            distro_profile=distro,
+            auto_deps=auto_deps,
+            progress_callback=progress_callback
+        )
+        
+        if result and result.get("success", False):
+            click.echo(f"Conversion successful. RPM package created: {result['rpm_path']}")
+            return 0
+        else:
+            click.echo(f"Error: {result['message']}", err=True)
+            return 1
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
         return 1
 
 
 def start_gui() -> None:
     """Start the GUI application."""
+    # Import PySide6 modules for GUI
+    from PySide6.QtWidgets import QApplication
+    
     app = None
     
     # Check if QApplication instance already exists
     if not QApplication.instance():
-        from PySide6.QtWidgets import QApplication
         app = QApplication(sys.argv)
     else:
         app = QApplication.instance()
@@ -100,18 +111,23 @@ def start_gui() -> None:
     sys.exit(app.exec())
 
 
-def main(args: Optional[List[str]] = None) -> None:
+def main() -> int:
     """Main entry point for the application."""
-    if args is None:
-        args = sys.argv[1:]
+    args = sys.argv[1:]
     
     if args:
         # If arguments are provided, use CLI mode
-        cli()
+        return cli()
     else:
         # Otherwise, start the GUI
-        start_gui()
+        try:
+            start_gui()
+            return 0
+        except ImportError as e:
+            click.echo(f"Error starting GUI: {str(e)}", err=True)
+            click.echo("Make sure PySide6 is installed. You can use CLI mode with --help for options.")
+            return 1
 
 
 if __name__ == "__main__":
-    main() 
+    sys.exit(main()) 

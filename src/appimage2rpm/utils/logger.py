@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Logging utilities for the AppImage2RPM application.
+Logging utilities for AppImage2RPM.
 """
 
 import os
@@ -11,11 +11,204 @@ import logging
 import traceback
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Union
 from queue import Queue
 from threading import Lock
 
 from PySide6.QtCore import QObject, Signal, Slot
+
+# Define log levels and their names
+LOG_LEVELS = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+}
+
+# Default log format
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Application log directory
+def get_log_dir() -> Path:
+    """
+    Get the directory for storing application logs.
+    
+    Returns:
+        Path to the log directory
+    """
+    if sys.platform == "win32":
+        log_dir = Path(os.path.expandvars("%APPDATA%")) / "AppImage2RPM" / "logs"
+    else:
+        log_dir = Path.home() / ".config" / "appimage2rpm" / "logs"
+        
+    os.makedirs(log_dir, exist_ok=True)
+    return log_dir
+
+def configure_logging(
+    level: Union[str, int] = "info",
+    log_file: Optional[str] = None,
+    console: bool = True,
+    log_format: str = DEFAULT_LOG_FORMAT,
+    date_format: str = DEFAULT_DATE_FORMAT
+) -> None:
+    """
+    Configure the logging system for the application.
+    
+    Args:
+        level: Log level (debug, info, warning, error, critical) or logging level constant
+        log_file: Optional path to log file
+        console: Whether to log to console
+        log_format: Format string for log messages
+        date_format: Format string for date/time in log messages
+    """
+    # Convert string level to logging constant if needed
+    if isinstance(level, str):
+        level = level.lower()
+        level = LOG_LEVELS.get(level, logging.INFO)
+    
+    # Create root logger and set level
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+    
+    # Remove existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Create formatter
+    formatter = logging.Formatter(log_format, date_format)
+    
+    # Add console handler if requested
+    if console:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+    
+    # Add file handler if log file specified
+    if log_file:
+        try:
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except Exception as e:
+            logging.error(f"Failed to create log file handler: {str(e)}")
+    
+    # Add a default log file in the user's config directory
+    if not log_file:
+        try:
+            log_dir = get_log_dir()
+            default_log_file = log_dir / "appimage2rpm.log"
+            file_handler = logging.FileHandler(str(default_log_file))
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except Exception as e:
+            logging.error(f"Failed to create default log file handler: {str(e)}")
+    
+    # Add a handler that logs warnings and above to stderr
+    class StdErrHandler(logging.StreamHandler):
+        """Handler for logging warnings and above to stderr."""
+        def __init__(self):
+            super().__init__(sys.stderr)
+            self.setLevel(logging.WARNING)
+    
+    stderr_handler = StdErrHandler()
+    stderr_handler.setFormatter(formatter)
+    root_logger.addHandler(stderr_handler)
+    
+    # Log that the logging system is initialized
+    logging.info("Logging system initialized")
+
+
+class LogCapture:
+    """
+    Utility class to capture logs during a specific operation.
+    
+    This class helps collect logs during an operation that can be
+    later retrieved for display or analysis.
+    """
+    
+    def __init__(self, log_format: str = DEFAULT_LOG_FORMAT) -> None:
+        """
+        Initialize the log capture.
+        
+        Args:
+            log_format: Format string for log messages
+        """
+        self.log_format = log_format
+        self.formatter = logging.Formatter(log_format)
+        self.logs = []
+        self.handler = self._create_handler()
+    
+    def _create_handler(self) -> logging.Handler:
+        """
+        Create a handler that captures logs.
+        
+        Returns:
+            A logging handler that stores logs in memory
+        """
+        class CaptureHandler(logging.Handler):
+            def __init__(self, callback):
+                super().__init__()
+                self.callback = callback
+            
+            def emit(self, record):
+                formatted = self.format(record)
+                self.callback(record, formatted)
+        
+        handler = CaptureHandler(self._handle_log)
+        handler.setFormatter(self.formatter)
+        return handler
+    
+    def _handle_log(self, record: logging.LogRecord, formatted: str) -> None:
+        """
+        Handle a log record.
+        
+        Args:
+            record: The log record
+            formatted: The formatted log message
+        """
+        self.logs.append((record, formatted))
+    
+    def start(self) -> None:
+        """Start capturing logs."""
+        logging.getLogger().addHandler(self.handler)
+    
+    def stop(self) -> None:
+        """Stop capturing logs."""
+        logging.getLogger().removeHandler(self.handler)
+    
+    def get_logs(self) -> list:
+        """
+        Get the captured logs.
+        
+        Returns:
+            List of captured log records and their formatted messages
+        """
+        return self.logs
+    
+    def get_formatted_logs(self) -> str:
+        """
+        Get captured logs as a formatted string.
+        
+        Returns:
+            String containing all captured logs
+        """
+        return "\n".join(formatted for _, formatted in self.logs)
+    
+    def clear(self) -> None:
+        """Clear the captured logs."""
+        self.logs = []
+    
+    def __enter__(self):
+        """Start capturing when used as a context manager."""
+        self.start()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Stop capturing when exiting the context manager."""
+        self.stop()
+        return False  # Don't suppress exceptions
 
 
 class LogHandler(QObject, logging.Handler):

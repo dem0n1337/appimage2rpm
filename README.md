@@ -19,7 +19,16 @@ Convert AppImage packages to RPM format easily with a modern GUI or command line
 
 - Python 3.8 or newer
 - RPM build tools (`rpmbuild`, `rpm-build` package)
+- RPM Python bindings (`python3-rpm` package)
 - Qt6 libraries (for GUI)
+
+Install system dependencies on Fedora/RHEL:
+
+```bash
+sudo dnf install rpm-build python3-rpm
+```
+
+On other distributions, use the appropriate package manager to install equivalent packages.
 
 ### From Source
 
@@ -30,18 +39,20 @@ git clone https://github.com/dem0n1337/appimage2rpm.git
 cd appimage2rpm
 ```
 
-2. Create a virtual environment and install dependencies:
+2. Create a virtual environment and install the package:
 
 ```bash
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install --upgrade pip build
+pip install -e .
 ```
 
-3. Install the package:
+Alternatively, build distribution packages:
 
 ```bash
-pip install -e .
+python -m build
+pip install dist/appimage2rpm-1.0.0-py3-none-any.whl
 ```
 
 ## Usage

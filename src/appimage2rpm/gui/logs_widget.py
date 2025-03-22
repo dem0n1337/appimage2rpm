@@ -2,209 +2,174 @@
 # -*- coding: utf-8 -*-
 
 """
-Logs widget module for the AppImage2RPM GUI.
+Logs widget for displaying application logs.
 """
 
-import os
 import logging
-import time
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Dict, Any
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPlainTextEdit,
-    QPushButton, QComboBox, QLabel
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTextEdit,
+    QComboBox, QLabel, QCheckBox, QGroupBox
 )
-from PySide6.QtCore import Qt, Signal, Slot, QTimer
-from PySide6.QtGui import QColor, QTextCharFormat, QBrush, QTextCursor
-
-from appimage2rpm.utils.logger import LogHandler
+from PySide6.QtCore import Qt, Signal, Slot, QSize
+from PySide6.QtGui import QTextCursor, QColor, QTextCharFormat
 
 
-class ColoredTextEdit(QPlainTextEdit):
-    """
-    Text edit widget with support for colored log messages.
+class LogHandler(logging.Handler):
+    """Custom logging handler that emits log messages as signals."""
     
-    This widget extends QPlainTextEdit to provide color-coded log messages
-    based on severity level.
-    """
-    
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, callback) -> None:
         """
-        Initialize the colored text edit.
+        Initialize the log handler.
         
         Args:
-            parent: Parent widget
+            callback: Function to call with log records
         """
-        super().__init__(parent)
-        
-        # Make the text edit read-only
-        self.setReadOnly(True)
-        
-        # Set up font
-        font = self.font()
-        font.setFamily("Monospace")
-        font.setFixedPitch(True)
-        self.setFont(font)
-        
-        # Define colors for different log levels
-        self.log_colors = {
-            logging.DEBUG: QColor(128, 128, 128),     # Gray
-            logging.INFO: QColor(0, 0, 0),            # Black
-            logging.WARNING: QColor(255, 165, 0),     # Orange
-            logging.ERROR: QColor(255, 0, 0),         # Red
-            logging.CRITICAL: QColor(255, 0, 0, 255), # Bright red
-        }
-        
-    def append_log(self, msg: str, level: int = logging.INFO) -> None:
+        super().__init__()
+        self.callback = callback
+    
+    def emit(self, record: logging.LogRecord) -> None:
         """
-        Append a log message with appropriate color.
+        Emit a log record.
         
         Args:
-            msg: Log message
-            level: Log level
+            record: The log record to emit
         """
-        # Get color for log level
-        color = self.log_colors.get(level, QColor(0, 0, 0))
-        
-        # Create text format with color
-        format = QTextCharFormat()
-        format.setForeground(QBrush(color))
-        
-        # Add text with color
-        cursor = self.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        cursor.insertText(msg + '\n', format)
-        
-        # Scroll to bottom
-        self.setTextCursor(cursor)
-        self.ensureCursorVisible()
+        try:
+            msg = self.format(record)
+            self.callback(record, msg)
+        except Exception:
+            self.handleError(record)
 
 
 class LogsWidget(QWidget):
     """
-    Widget for displaying application logs.
+    Widget for displaying and filtering application logs.
     
-    This widget shows a scrollable log view with color-coded messages
-    and provides controls for filtering and saving logs.
+    This widget shows log messages from the application and provides
+    filtering options by log level.
     """
     
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        """
-        Initialize the logs widget.
+    def __init__(self) -> None:
+        """Initialize the logs widget."""
+        super().__init__()
         
-        Args:
-            parent: Parent widget
-        """
-        super().__init__(parent)
+        self.log_handler = LogHandler(self.handle_log)
+        self.log_handler.setFormatter(logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+            '%H:%M:%S'
+        ))
         
-        # Store logs for filtering
-        self.logs = []
+        # Add the handler to the root logger
+        logging.getLogger().addHandler(self.log_handler)
         
-        # Set up the UI
+        self.log_colors = {
+            logging.DEBUG: QColor(128, 128, 128),  # Gray
+            logging.INFO: QColor(0, 0, 0),         # Black
+            logging.WARNING: QColor(255, 165, 0),  # Orange
+            logging.ERROR: QColor(255, 0, 0),      # Red
+            logging.CRITICAL: QColor(139, 0, 0)    # Dark Red
+        }
+        
         self.setup_ui()
-        
-        # Register log handler
-        self.log_handler = LogHandler()
-        self.log_handler.log_signal.connect(self.on_log_message)
-        
-        # Get root logger and add handler
-        root_logger = logging.getLogger()
-        root_logger.addHandler(self.log_handler)
-        
-        # Update logs periodically
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.process_pending_logs)
-        self.timer.start(100)  # Update every 100ms
-        
+    
     def setup_ui(self) -> None:
-        """Set up the user interface."""
-        # Main layout
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        
-        # Controls layout
-        controls_layout = QHBoxLayout()
+        """Set up the user interface for the logs widget."""
+        main_layout = QVBoxLayout(self)
         
         # Log level filter
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItem("Debug", logging.DEBUG)
-        self.filter_combo.addItem("Info", logging.INFO)
-        self.filter_combo.addItem("Warning", logging.WARNING)
-        self.filter_combo.addItem("Error", logging.ERROR)
-        self.filter_combo.addItem("Critical", logging.CRITICAL)
-        self.filter_combo.setCurrentIndex(1)  # Default to INFO
-        self.filter_combo.currentIndexChanged.connect(self.apply_filter)
+        filter_layout = QHBoxLayout()
         
-        # Label for filter
-        filter_label = QLabel("Log Level:")
+        self.level_label = QLabel("Log Level:")
+        self.level_combo = QComboBox()
+        self.level_combo.addItem("DEBUG", logging.DEBUG)
+        self.level_combo.addItem("INFO", logging.INFO)
+        self.level_combo.addItem("WARNING", logging.WARNING)
+        self.level_combo.addItem("ERROR", logging.ERROR)
+        self.level_combo.addItem("CRITICAL", logging.CRITICAL)
+        self.level_combo.setCurrentIndex(1)  # Default to INFO
+        self.level_combo.currentIndexChanged.connect(self.apply_log_filter)
         
-        # Clear button
+        self.auto_scroll_check = QCheckBox("Auto Scroll")
+        self.auto_scroll_check.setChecked(True)
+        
         self.clear_button = QPushButton("Clear")
         self.clear_button.clicked.connect(self.clear_logs)
         
-        controls_layout.addWidget(filter_label)
-        controls_layout.addWidget(self.filter_combo)
-        controls_layout.addStretch()
-        controls_layout.addWidget(self.clear_button)
+        filter_layout.addWidget(self.level_label)
+        filter_layout.addWidget(self.level_combo)
+        filter_layout.addWidget(self.auto_scroll_check)
+        filter_layout.addStretch()
+        filter_layout.addWidget(self.clear_button)
         
         # Log text display
-        self.log_display = ColoredTextEdit()
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setLineWrapMode(QTextEdit.NoWrap)
+        self.log_text.setFont(QTextEdit.font(self.log_text))  # Monospace font
         
-        # Add widgets to layout
-        layout.addLayout(controls_layout)
-        layout.addWidget(self.log_display)
+        main_layout.addLayout(filter_layout)
+        main_layout.addWidget(self.log_text)
         
-    def clear_logs(self) -> None:
-        """Clear the log display."""
-        self.log_display.clear()
-        self.logs = []
-        
-    def save_logs(self, file_path: str) -> None:
+        # Set minimum height
+        self.setMinimumHeight(200)
+    
+    def handle_log(self, record: logging.LogRecord, formatted_msg: str) -> None:
         """
-        Save logs to a file.
+        Handle a log record by displaying it in the text widget.
         
         Args:
-            file_path: Path to save the logs
+            record: The log record
+            formatted_msg: The formatted log message
         """
-        try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(self.log_display.toPlainText())
-        except Exception as e:
-            logging.error(f"Error saving logs: {str(e)}")
-            
-    @Slot(int, str)
-    def on_log_message(self, level: int, message: str) -> None:
-        """
-        Handle new log message.
+        if record.levelno < self.level_combo.currentData():
+            return
         
-        Args:
-            level: Log level
-            message: Log message
-        """
-        # Store log for filtering
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        self.logs.append((timestamp, level, message))
+        # Add colored text
+        cursor = self.log_text.textCursor()
+        cursor.movePosition(QTextCursor.End)
         
-        # Apply filter
-        current_filter = self.filter_combo.currentData()
-        if level >= current_filter:
-            self.log_display.append_log(f"{timestamp} - {message}", level)
-            
-    def apply_filter(self) -> None:
+        text_format = QTextCharFormat()
+        text_format.setForeground(self.log_colors.get(record.levelno, QColor(0, 0, 0)))
+        
+        cursor.insertText(formatted_msg + "\n", text_format)
+        
+        # Auto scroll if enabled
+        if self.auto_scroll_check.isChecked():
+            self.log_text.setTextCursor(cursor)
+            self.log_text.ensureCursorVisible()
+    
+    @Slot()
+    def apply_log_filter(self) -> None:
         """Apply the selected log level filter."""
-        # Get selected filter level
-        filter_level = self.filter_combo.currentData()
+        self.clear_logs()
         
-        # Clear and re-add filtered logs
-        self.log_display.clear()
-        for timestamp, level, message in self.logs:
-            if level >= filter_level:
-                self.log_display.append_log(f"{timestamp} - {message}", level)
-                
-    def process_pending_logs(self) -> None:
-        """Process any pending log messages."""
-        # This method is called periodically by the timer
-        # LogHandler already handles buffering and emits signals
-        # for each log message, so nothing else is needed here
-        pass 
+        # No need to reapply logs, new logs will be filtered automatically
+        level = self.level_combo.currentData()
+        logging.info(f"Log level filter set to {logging.getLevelName(level)}")
+    
+    @Slot()
+    def clear_logs(self) -> None:
+        """Clear all log messages from the display."""
+        self.log_text.clear()
+    
+    def get_logs_text(self) -> str:
+        """
+        Get the current log text.
+        
+        Returns:
+            The current log text as a string
+        """
+        return self.log_text.toPlainText()
+    
+    def closeEvent(self, event) -> None:
+        """
+        Handle the widget close event.
+        
+        Args:
+            event: The close event
+        """
+        # Remove the log handler when the widget is closed
+        logging.getLogger().removeHandler(self.log_handler)
+        super().closeEvent(event) 

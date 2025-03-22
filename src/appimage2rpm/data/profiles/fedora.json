@@ -1,0 +1,36 @@
+{
+    "id": "fedora",
+    "name": "Fedora",
+    "version": "latest",
+    "dependencies": {
+        "lib_prefixes": [
+            "/usr/lib64/",
+            "/usr/lib/"
+        ],
+        "excluded_libs": [
+            "ld-linux-x86-64.so.2",
+            "libc.so.6",
+            "libpthread.so.0",
+            "libdl.so.2",
+            "libm.so.6",
+            "librt.so.1"
+        ],
+        "system_packages": {
+            "gtk": "gtk3",
+            "qt": "qt5-qtbase",
+            "libgl": "mesa-libGL"
+        }
+    },
+    "rpm_settings": {
+        "vendor": "Fedora Project",
+        "packager": "AppImage2RPM Converter",
+        "group": "Applications/System",
+        "license": "Unspecified",
+        "buildarch": "x86_64",
+        "prefix": "/usr",
+        "requires": [
+            "bash",
+            "coreutils"
+        ]
+    }
+} 
